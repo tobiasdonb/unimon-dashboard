@@ -1,3 +1,12 @@
+<?php
+session_start();
+if (!isset($_SESSION['username'])) {
+    header("Location: ../../index.php");
+    exit;
+}
+
+$username = $_SESSION['username'];
+?>
 <!DOCTYPE html>
 <html lang="en">
 
@@ -46,10 +55,44 @@
             appearance: none;
             text-align-last: center;
         }
+        /* Back button style */
+        .back-btn {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 50;
+        }
+        .back-btn a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #fff;
+            padding: 10px 16px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: #333;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .back-btn a:hover {
+            background: #f0f0f0;
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 
 <body class="p-8 md:p-12 min-h-screen flex flex-col font-sans text-gray-800">
+
+    <!-- Back Button -->
+    <div class="back-btn">
+        <a href="../../dashboard.php">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            <span>Dashboard</span>
+        </a>
+    </div>
 
     <div class="max-w-5xl mx-auto w-full">
         <header
@@ -176,13 +219,21 @@
         console.log("Loading MQTT Config:", mqttConfig);
 
         const clientID = "dashboard_json_" + new Date().getTime();
-        const client = new Paho.MQTT.Client(mqttConfig.host, mqttConfig.port, clientID);
+        let client = new Paho.MQTT.Client(mqttConfig.host, mqttConfig.port, clientID);
+        let reconnectTimeout = null;
 
         client.onConnectionLost = function (responseObject) {
             console.log("Connection Lost: " + responseObject.errorMessage);
             const statusElem = document.getElementById("status");
-            statusElem.innerText = "Status: Disconnected!";
+            statusElem.innerText = "Status: Terputus! Menghubungkan ulang...";
             statusElem.className = "mt-2 text-sm font-medium text-red-600";
+            
+            // Auto-reconnect after 3 seconds
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(function() {
+                console.log("Attempting to reconnect...");
+                connect();
+            }, 3000);
         };
 
         client.onMessageArrived = function (message) {
@@ -207,18 +258,28 @@
             userName: mqttConfig.username,
             password: mqttConfig.password,
             onSuccess: onConnect,
-            onFailure: doFail
+            onFailure: doFail,
+            timeout: 10
         };
 
         function connect() {
             console.log("Mencoba menghubungkan ke " + mqttConfig.host + ":" + mqttConfig.port);
-            client.connect(options);
+            const statusElem = document.getElementById("status");
+            statusElem.innerText = "Status: Menghubungkan...";
+            statusElem.className = "mt-2 text-sm font-medium text-orange-600";
+            
+            try {
+                client.connect(options);
+            } catch (error) {
+                console.error("Connection error:", error);
+                doFail({errorCode: 0, errorMessage: error.message});
+            }
         }
 
         function onConnect() {
             console.log("Terhubung ke MQTT Broker!");
             const statusElem = document.getElementById("status");
-            statusElem.innerText = "Status: Connected";
+            statusElem.innerText = "Status: Terhubung";
             statusElem.className = "mt-2 text-sm font-medium text-green-600";
             client.subscribe(mqttConfig.topics.subscribe.data);
         }
@@ -226,8 +287,15 @@
         function doFail(e) {
             console.log("Gagal connect:", e);
             const statusElem = document.getElementById("status");
-            statusElem.innerText = "Status: Gagal (" + e.errorCode + ")";
+            statusElem.innerText = "Status: Gagal (" + (e.errorMessage || e.errorCode) + ")";
             statusElem.className = "mt-2 text-sm font-medium text-red-600";
+            
+            // Auto-retry after 5 seconds
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(function() {
+                console.log("Retrying connection...");
+                connect();
+            }, 5000);
         }
 
         // --- FUNGSI GANTI BATCH TYPE (JENIS TELUR) ---
@@ -276,14 +344,15 @@
 
             if (client.isConnected()) {
                 console.log("Publishing: " + payloadString);
-                message = new Paho.MQTT.Message(payloadString);
-                message.destinationName = mqttConfig.topics.publish.control;
-                client.send(message);
+                const mqttMessage = new Paho.MQTT.Message(payloadString);
+                mqttMessage.destinationName = mqttConfig.topics.publish.control;
+                client.send(mqttMessage);
             } else {
                 console.log("MQTT not connected (Buffered update: " + payloadString + ")");
             }
         }
 
+        // Start connection
         connect();
     </script>
 </body>
